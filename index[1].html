@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<title>Paisa Book</title>
+<meta name="apple-mobile-web-app-title" content="Paisa Book" />
+<meta name="theme-color" content="#14161A" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<link rel="manifest" href="manifest.json" />
+<link rel="icon" href="icon-192.png" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  html, body { background:#14161A; margin:0; padding:0; overscroll-behavior:none; }
+  * { -webkit-tap-highlight-color: transparent; }
+  input[type="date"]::-webkit-calendar-picker-indicator,
+  input[type="time"]::-webkit-calendar-picker-indicator { filter: invert(0.7); }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+  // Minimal localStorage-backed shim matching the Claude artifact window.storage API shape
+  window.storage = {
+    get: async (key) => {
+      const v = localStorage.getItem('ledger:' + key);
+      if (v === null) throw new Error('not found');
+      return { key, value: v, shared: false };
+    },
+    set: async (key, value) => {
+      localStorage.setItem('ledger:' + key, value);
+      return { key, value, shared: false };
+    },
+    delete: async (key) => {
+      localStorage.removeItem('ledger:' + key);
+      return { key, deleted: true, shared: false };
+    },
+    list: async (prefix) => {
+      const keys = Object.keys(localStorage)
+        .filter(k => k.startsWith('ledger:' + (prefix || '')))
+        .map(k => k.replace('ledger:', ''));
+      return { keys };
+    }
+  };
+
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js').catch(() => {});
+    });
+  }
+</script>
+
+<script type="text/jsx-source" id="app-source">
+const { useState, useEffect, useMemo, useCallback } = React;
+
+// ---------- tiny inline icon set (replaces lucide-react for standalone use) ----------
+function Icon({ size = 16, style = {}, children }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+      style={{ color: style.color || 'currentColor', display: 'block', ...style }}>
+      {children}
+    </svg>
+  );
+}
+const Plus = p => <Icon {...p}><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></Icon>;
+const X = p => <Icon {...p}><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></Icon>;
+const CalendarIcon = p => <Icon {...p}><rect x="3" y="4" width="18" height="17" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></Icon>;
+const List = p => <Icon {...p}><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3.5" cy="6" r="1"/><circle cx="3.5" cy="12" r="1"/><circle cx="3.5" cy="18" r="1"/></Icon>;
+const HomeIcon = p => <Icon {...p}><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></Icon>;
+const Tag = p => <Icon {...p}><path d="M20 12l-8 8-9-9V4h7z"/><circle cx="7.5" cy="7.5" r="1.2" fill="currentColor" stroke="none"/></Icon>;
+const AlertTriangle = p => <Icon {...p}><path d="M12 3l10 18H2z"/><line x1="12" y1="10" x2="12" y2="15"/><circle cx="12" cy="18" r="0.9" fill="currentColor" stroke="none"/></Icon>;
+const Trash2 = p => <Icon {...p}><polyline points="4,7 20,7"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/></Icon>;
+const ChevronLeft = p => <Icon {...p}><polyline points="15,4 7,12 15,20"/></Icon>;
+const ChevronRight = p => <Icon {...p}><polyline points="9,4 17,12 9,20"/></Icon>;
+const Pencil = p => <Icon {...p}><path d="M4 20l4-1 12-12-3-3L5 16z"/></Icon>;
+const Wallet = p => <Icon {...p}><path d="M3 7h15a2 2 0 0 1 2 2v9H5a2 2 0 0 1-2-2z"/><path d="M3 7V6a2 2 0 0 1 2-2h11v3"/><circle cx="16" cy="13" r="1.4" fill="currentColor" stroke="none"/></Icon>;
+
+// ---------- design tokens ----------
+const C = {
+  base: '#14161A', surface: '#1B1E23', surface2: '#22262C',
+  border: '#2B3037', borderSoft: '#22262C',
+  text: '#EDEEF0', muted: '#8B9099', faint: '#565C66',
+  positive: '#4ADE9C', warning: '#F5B049', danger: '#F0665A',
+  sky: '#5FB4E8', violet: '#B18CF0',
+};
+const SWATCHES = ['#4ADE9C', '#5FB4E8', '#B18CF0', '#F5B049', '#F0665A', '#F17FB3', '#7DD3FC', '#FCD34D'];
+const DEFAULT_CATEGORIES = [
+  { id: 'household', name: 'Household', color: '#4ADE9C', limit: 0 },
+  { id: 'entertainment', name: 'Entertainment', color: '#B18CF0', limit: 0 },
+  { id: 'food', name: 'Food & Dining', color: '#F5B049', limit: 0 },
+  { id: 'transport', name: 'Transport', color: '#5FB4E8', limit: 0 },
+];
+
+// ---------- date helpers ----------
+const pad = n => String(n).padStart(2, '0');
+const toKey = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const parseKey = k => { const [y, m, d] = k.split('-').map(Number); return new Date(y, m - 1, d); };
+const monthKeyOf = k => k.slice(0, 7);
+const startOfWeek = d => { const nd = new Date(d); const day = (nd.getDay() + 6) % 7; nd.setDate(nd.getDate() - day); return nd; };
+const todayKey = toKey(new Date());
+const yesterdayKey = (() => { const d = new Date(); d.setDate(d.getDate() - 1); return toKey(d); })();
+const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+function dayLabel(key) {
+  if (key === todayKey) return 'Today';
+  if (key === yesterdayKey) return 'Yesterday';
+  const d = parseKey(key);
+  return `${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()]}, ${d.getDate()} ${MONTHS[d.getMonth()].slice(0,3)}`;
+}
+function weekLabel(key) {
+  const start = parseKey(key);
+  const end = new Date(start); end.setDate(end.getDate() + 6);
+  const sameMonth = start.getMonth() === end.getMonth();
+  return `${start.getDate()} ${sameMonth ? '' : MONTHS[start.getMonth()].slice(0,3)+' '}\u2013 ${end.getDate()} ${MONTHS[end.getMonth()].slice(0,3)}`;
+}
+function monthLabel(key) {
+  const [y, m] = key.split('-').map(Number);
+  return `${MONTHS[m - 1]} ${y}`;
+}
+const fmt = n => '\u20B9' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+
+async function loadKey(key, fallback) {
+  try { const r = await window.storage.get(key); return r ? JSON.parse(r.value) : fallback; }
+  catch (e) { return fallback; }
+}
+async function saveKey(key, value) {
+  try { await window.storage.set(key, JSON.stringify(value)); } catch (e) {}
+}
+
+function Ledger() {
+  const [loaded, setLoaded] = useState(false);
+  const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
+  const [expenses, setExpenses] = useState([]);
+  const [balance, setBalance] = useState(null);
+
+  const [tab, setTab] = useState('home');
+  const [groupBy, setGroupBy] = useState('day');
+  const [calMonth, setCalMonth] = useState(new Date());
+  const [selectedDay, setSelectedDay] = useState(todayKey);
+
+  const [showAdd, setShowAdd] = useState(false);
+  const [addPrefillDate, setAddPrefillDate] = useState(todayKey);
+  const [showBalance, setShowBalance] = useState(false);
+  const [catModal, setCatModal] = useState(null);
+  const [toast, setToast] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      const [cats, exps, settings] = await Promise.all([
+        loadKey('categories', DEFAULT_CATEGORIES),
+        loadKey('expenses', []),
+        loadKey('settings', { balance: null }),
+      ]);
+      setCategories(cats); setExpenses(exps); setBalance(settings.balance);
+      setLoaded(true);
+    })();
+  }, []);
+
+  useEffect(() => { if (loaded) saveKey('categories', categories); }, [categories, loaded]);
+  useEffect(() => { if (loaded) saveKey('expenses', expenses); }, [expenses, loaded]);
+  useEffect(() => { if (loaded) saveKey('settings', { balance }); }, [balance, loaded]);
+
+  const showToast = useCallback((type, msg) => {
+    setToast({ type, msg, id: uid() });
+    setTimeout(() => setToast(t => (t && t.msg === msg ? null : t)), 3800);
+  }, []);
+
+  const getCategory = useCallback(id => categories.find(c => c.id === id) || { name: 'Uncategorized', color: C.faint, limit: 0 }, [categories]);
+
+  const thisMonthKey = monthKeyOf(todayKey);
+  const spentInMonth = useCallback((mKey, categoryId) => expenses
+    .filter(e => monthKeyOf(e.date) === mKey && (!categoryId || e.categoryId === categoryId))
+    .reduce((s, e) => s + Number(e.amount), 0), [expenses]);
+
+  const spentThisMonth = spentInMonth(thisMonthKey);
+  const remaining = balance === null ? null : balance - spentThisMonth;
+
+  function addExpense({ amount, categoryId, note, date, time }) {
+    const amt = Number(amount);
+    if (!amt || amt <= 0) return;
+    const entry = { id: uid(), amount: amt, categoryId, note: note.trim(), date, time };
+    setExpenses(prev => [...prev, entry]);
+    const cat = getCategory(categoryId);
+    if (cat.limit > 0) {
+      const mKey = monthKeyOf(date);
+      const total = spentInMonth(mKey, categoryId) + amt;
+      const pct = total / cat.limit;
+      if (pct >= 1) showToast('danger', `Over the limit on ${cat.name} \u2014 ${fmt(total)} of ${fmt(cat.limit)}`);
+      else if (pct >= 0.8) showToast('warning', `Nearing your ${cat.name} limit \u2014 ${Math.round(pct * 100)}% used`);
+    }
+    setShowAdd(false);
+  }
+  function deleteExpense(id) { setExpenses(prev => prev.filter(e => e.id !== id)); }
+
+  function saveCategory(cat) {
+    setCategories(prev => {
+      const exists = prev.some(c => c.id === cat.id);
+      return exists ? prev.map(c => (c.id === cat.id ? cat : c)) : [...prev, cat];
+    });
+    setCatModal(null);
+  }
+  function deleteCategory(id) { setCategories(prev => prev.filter(c => c.id !== id)); setCatModal(null); }
+
+  const grouped = useMemo(() => {
+    const sorted = [...expenses].sort((a, b) => (a.date + a.time < b.date + b.time ? 1 : -1));
+    const map = new Map();
+    for (const e of sorted) {
+      let key;
+      if (groupBy === 'day') key = e.date;
+      else if (groupBy === 'week') key = toKey(startOfWeek(parseKey(e.date)));
+      else key = monthKeyOf(e.date);
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(e);
+    }
+    return [...map.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1));
+  }, [expenses, groupBy]);
+
+  const groupLabel = key => (groupBy === 'day' ? dayLabel(key) : groupBy === 'week' ? weekLabel(key) : monthLabel(key));
+  const recent = useMemo(() => [...expenses].sort((a, b) => (a.date + a.time < b.date + b.time ? 1 : -1)).slice(0, 5), [expenses]);
+
+  const calDays = useMemo(() => {
+    const y = calMonth.getFullYear(), m = calMonth.getMonth();
+    const first = new Date(y, m, 1);
+    const startOffset = (first.getDay() + 6) % 7;
+    const daysInMonth = new Date(y, m + 1, 0).getDate();
+    const totals = {}; let maxDay = 0;
+    expenses.forEach(e => {
+      if (e.date.startsWith(`${y}-${pad(m + 1)}`)) {
+        totals[e.date] = (totals[e.date] || 0) + Number(e.amount);
+        if (totals[e.date] > maxDay) maxDay = totals[e.date];
+      }
+    });
+    const cells = [];
+    for (let i = 0; i < startOffset; i++) cells.push(null);
+    for (let d = 1; d <= daysInMonth; d++) {
+      const key = `${y}-${pad(m + 1)}-${pad(d)}`;
+      cells.push({ key, d, total: totals[key] || 0 });
+    }
+    return { cells, maxDay };
+  }, [calMonth, expenses]);
+
+  const dayEntries = useMemo(() => expenses.filter(e => e.date === selectedDay).sort((a, b) => (a.time < b.time ? 1 : -1)), [expenses, selectedDay]);
+
+  if (!loaded) {
+    return <div style={{ background: C.base, color: C.muted }} className="min-h-screen flex items-center justify-center font-sans text-sm">Opening your paisa book\u2026</div>;
+  }
+
+  return (
+    <div style={{ background: C.base }} className="min-h-screen flex justify-center font-sans">
+      <div style={{ color: C.text }} className="w-full max-w-md relative min-h-screen pb-28">
+
+        {toast && (
+          <div className="fixed top-3 left-1/2 -translate-x-1/2 w-[92%] max-w-md z-50">
+            <div style={{ background: C.surface2, borderLeft: `3px solid ${toast.type === 'danger' ? C.danger : C.warning}` }}
+              className="flex items-start gap-2 rounded-lg px-3 py-2.5 shadow-lg">
+              <AlertTriangle size={16} style={{ color: toast.type === 'danger' ? C.danger : C.warning, marginTop: 2, flexShrink: 0 }} />
+              <span className="text-xs leading-snug" style={{ color: C.text }}>{toast.msg}</span>
+            </div>
+          </div>
+        )}
+
+        <div className="px-5 pt-6 pb-2 flex items-center justify-between">
+          <div>
+            <div style={{ color: C.faint, letterSpacing: '0.12em' }} className="text-[10px] font-semibold uppercase">Personal Finance</div>
+            <div className="text-xl font-bold" style={{ color: C.text }}>Paisa Book</div>
+          </div>
+          <button onClick={() => setShowBalance(true)} style={{ background: C.surface, border: `1px solid ${C.border}` }} className="p-2.5 rounded-full">
+            <Wallet size={17} style={{ color: C.positive }} />
+          </button>
+        </div>
+
+        {tab === 'home' && (
+          <div className="px-5 mt-3 flex flex-col gap-5">
+            <div onClick={() => setShowBalance(true)} style={{ background: C.surface, border: `1px dashed ${C.border}` }} className="rounded-2xl p-5 cursor-pointer">
+              {balance === null ? (
+                <div className="flex flex-col items-center text-center gap-1 py-2">
+                  <Wallet size={20} style={{ color: C.muted }} />
+                  <div className="text-sm mt-1" style={{ color: C.muted }}>Set your account balance to start tracking</div>
+                  <div className="text-xs" style={{ color: C.positive }}>Tap to set balance</div>
+                </div>
+              ) : (
+                <React.Fragment>
+                  <div style={{ color: C.faint }} className="text-[10px] font-semibold uppercase tracking-wider mb-1">Account Balance</div>
+                  <div className="font-mono text-3xl font-semibold" style={{ color: C.text }}>{fmt(balance)}</div>
+                  <div className="flex items-center justify-between mt-4 pt-4" style={{ borderTop: `1px solid ${C.border}` }}>
+                    <div>
+                      <div style={{ color: C.faint }} className="text-[10px] uppercase tracking-wider">Spent this month</div>
+                      <div className="font-mono text-sm mt-0.5" style={{ color: C.text }}>{fmt(spentThisMonth)}</div>
+                    </div>
+                    <div className="text-right">
+                      <div style={{ color: C.faint }} className="text-[10px] uppercase tracking-wider">Remaining</div>
+                      <div className="font-mono text-sm mt-0.5 font-semibold" style={{ color: remaining < 0 ? C.danger : remaining < balance * 0.15 ? C.warning : C.positive }}>{fmt(remaining)}</div>
+                    </div>
+                  </div>
+                </React.Fragment>
+              )}
+            </div>
+
+            {categories.length > 0 && (
+              <div>
+                <div className="flex items-center justify-between mb-2 px-1">
+                  <div style={{ color: C.faint }} className="text-[10px] font-semibold uppercase tracking-wider">Categories this month</div>
+                </div>
+                <div className="flex flex-col gap-2">
+                  {categories.map(cat => {
+                    const spent = spentInMonth(thisMonthKey, cat.id);
+                    const pct = cat.limit > 0 ? Math.min(spent / cat.limit, 1) : 0;
+                    const barColor = pct >= 1 ? C.danger : pct >= 0.8 ? C.warning : cat.color;
+                    return (
+                      <div key={cat.id} style={{ background: C.surface, border: `1px solid ${C.borderSoft}` }} className="rounded-xl px-3.5 py-3">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <div className="flex items-center gap-2">
+                            <span style={{ background: cat.color, width: 8, height: 8, borderRadius: 999 }}></span>
+                            <span className="text-sm font-medium">{cat.name}</span>
+                          </div>
+                          <span className="font-mono text-xs" style={{ color: C.muted }}>{fmt(spent)}{cat.limit > 0 ? ` / ${fmt(cat.limit)}` : ''}</span>
+                        </div>
+                        {cat.limit > 0 && (
+                          <div style={{ background: C.surface2, height: 5, borderRadius: 999, overflow: 'hidden' }}>
+                            <div style={{ width: `${pct * 100}%`, background: barColor, height: '100%', borderRadius: 999 }}></div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            <div>
+              <div style={{ color: C.faint }} className="text-[10px] font-semibold uppercase tracking-wider mb-2 px-1">Recent activity</div>
+              {recent.length === 0 ? <EmptyState text="No entries yet. Log your first expense below." /> : (
+                <div style={{ background: C.surface, border: `1px solid ${C.borderSoft}` }} className="rounded-xl divide-y">
+                  {recent.map(e => <ExpenseRow key={e.id} e={e} cat={getCategory(e.categoryId)} onDelete={() => deleteExpense(e.id)} />)}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {tab === 'ledger' && (
+          <div className="px-5 mt-3">
+            <div style={{ background: C.surface, border: `1px solid ${C.borderSoft}` }} className="flex rounded-full p-1 mb-4">
+              {['day', 'week', 'month'].map(g => (
+                <button key={g} onClick={() => setGroupBy(g)}
+                  style={{ background: groupBy === g ? C.surface2 : 'transparent', color: groupBy === g ? C.text : C.muted }}
+                  className="flex-1 text-xs font-medium py-1.5 rounded-full capitalize transition-colors">{g}</button>
+              ))}
+            </div>
+            {grouped.length === 0 ? <EmptyState text="No expenses logged yet." /> : (
+              <div className="flex flex-col gap-4">
+                {grouped.map(([key, items]) => {
+                  const total = items.reduce((s, e) => s + Number(e.amount), 0);
+                  return (
+                    <div key={key}>
+                      <div className="flex items-center justify-between mb-1.5 px-1">
+                        <span className="text-xs font-semibold" style={{ color: C.text }}>{groupLabel(key)}</span>
+                        <span className="font-mono text-xs" style={{ color: C.muted }}>{fmt(total)}</span>
+                      </div>
+                      <div style={{ background: C.surface, border: `1px solid ${C.borderSoft}` }} className="rounded-xl divide-y">
+                        {items.map(e => <ExpenseRow key={e.id} e={e} cat={getCategory(e.categoryId)} onDelete={() => deleteExpense(e.id)} showDate={groupBy !== 'day'} />)}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {tab === 'calendar' && (
+          <div className="px-5 mt-3">
+            <div className="flex items-center justify-between mb-4">
+              <button onClick={() => setCalMonth(m => new Date(m.getFullYear(), m.getMonth() - 1, 1))} style={{ background: C.surface, border: `1px solid ${C.border}` }} className="p-2 rounded-full"><ChevronLeft size={16} /></button>
+              <span className="text-sm font-semibold">{MONTHS[calMonth.getMonth()]} {calMonth.getFullYear()}</span>
+              <button onClick={() => setCalMonth(m => new Date(m.getFullYear(), m.getMonth() + 1, 1))} style={{ background: C.surface, border: `1px solid ${C.border}` }} className="p-2 rounded-full"><ChevronRight size={16} /></button>
+            </div>
+            <div className="grid grid-cols-7 gap-1 mb-1">
+              {WEEKDAYS.map(w => <div key={w} className="text-center text-[10px] font-medium" style={{ color: C.faint }}>{w}</div>)}
+            </div>
+            <div className="grid grid-cols-7 gap-1">
+              {calDays.cells.map((cell, i) => {
+                if (!cell) return <div key={i}></div>;
+                const isSelected = cell.key === selectedDay;
+                const isToday = cell.key === todayKey;
+                const intensity = calDays.maxDay > 0 ? cell.total / calDays.maxDay : 0;
+                return (
+                  <button key={cell.key} onClick={() => setSelectedDay(cell.key)}
+                    style={{ background: isSelected ? C.surface2 : 'transparent', border: isSelected ? `1px solid ${C.positive}` : isToday ? `1px solid ${C.border}` : '1px solid transparent' }}
+                    className="aspect-square rounded-lg flex flex-col items-center justify-center gap-0.5">
+                    <span className="text-xs" style={{ color: isSelected ? C.text : C.muted }}>{cell.d}</span>
+                    {cell.total > 0 && <span style={{ width: 4, height: 4, borderRadius: 999, background: intensity > 0.66 ? C.danger : intensity > 0.33 ? C.warning : C.positive }}></span>}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="mt-5">
+              <div className="flex items-center justify-between mb-2 px-1">
+                <span className="text-xs font-semibold">{dayLabel(selectedDay)}</span>
+                <button onClick={() => { setAddPrefillDate(selectedDay); setShowAdd(true); }} className="flex items-center gap-1 text-xs font-medium" style={{ color: C.positive }}>
+                  <Plus size={13} /> Add entry
+                </button>
+              </div>
+              {dayEntries.length === 0 ? <EmptyState text="Nothing logged for this day." small /> : (
+                <div style={{ background: C.surface, border: `1px solid ${C.borderSoft}` }} className="rounded-xl divide-y">
+                  {dayEntries.map(e => <ExpenseRow key={e.id} e={e} cat={getCategory(e.categoryId)} onDelete={() => deleteExpense(e.id)} />)}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {tab === 'categories' && (
+          <div className="px-5 mt-3">
+            <div className="flex flex-col gap-2 mb-4">
+              {categories.map(cat => {
+                const spent = spentInMonth(thisMonthKey, cat.id);
+                return (
+                  <div key={cat.id} onClick={() => setCatModal(cat)} style={{ background: C.surface, border: `1px solid ${C.borderSoft}` }} className="rounded-xl px-4 py-3 flex items-center justify-between cursor-pointer">
+                    <div className="flex items-center gap-2.5">
+                      <span style={{ background: cat.color, width: 10, height: 10, borderRadius: 999 }}></span>
+                      <div>
+                        <div className="text-sm font-medium">{cat.name}</div>
+                        <div className="text-[11px]" style={{ color: C.faint }}>{cat.limit > 0 ? `Limit ${fmt(cat.limit)}/mo` : 'No limit set'}</div>
+                      </div>
+                    </div>
+                    <div className="text-right flex items-center gap-2">
+                      <span className="font-mono text-xs" style={{ color: C.muted }}>{fmt(spent)}</span>
+                      <Pencil size={13} style={{ color: C.faint }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <button onClick={() => setCatModal('new')} style={{ border: `1px dashed ${C.border}`, color: C.muted }} className="w-full rounded-xl py-3 text-sm font-medium flex items-center justify-center gap-1.5">
+              <Plus size={15} /> New category
+            </button>
+          </div>
+        )}
+
+        <div className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md z-40">
+          <div style={{ background: C.surface, borderTop: `1px solid ${C.border}` }} className="flex items-center justify-around px-2 pt-2 pb-4 relative">
+            <NavBtn icon={HomeIcon} label="Home" active={tab === 'home'} onClick={() => setTab('home')} />
+            <NavBtn icon={List} label="Ledger" active={tab === 'ledger'} onClick={() => setTab('ledger')} />
+            <div className="w-14"></div>
+            <NavBtn icon={CalendarIcon} label="Calendar" active={tab === 'calendar'} onClick={() => setTab('calendar')} />
+            <NavBtn icon={Tag} label="Categories" active={tab === 'categories'} onClick={() => setTab('categories')} />
+            <button onClick={() => { setAddPrefillDate(todayKey); setShowAdd(true); }} style={{ background: C.positive }}
+              className="absolute left-1/2 -translate-x-1/2 -top-5 w-14 h-14 rounded-full flex items-center justify-center shadow-lg">
+              <Plus size={24} style={{ color: C.base }} />
+            </button>
+          </div>
+        </div>
+
+        {showAdd && <AddExpenseModal categories={categories} defaultDate={addPrefillDate} onClose={() => setShowAdd(false)} onSave={addExpense} />}
+        {showBalance && <BalanceModal current={balance} onClose={() => setShowBalance(false)} onSave={v => { setBalance(v); setShowBalance(false); }} />}
+        {catModal && <CategoryModal category={catModal === 'new' ? null : catModal} onClose={() => setCatModal(null)} onSave={saveCategory} onDelete={catModal !== 'new' ? () => deleteCategory(catModal.id) : null} />}
+      </div>
+    </div>
+  );
+}
+
+function NavBtn({ icon: IconComp, label, active, onClick }) {
+  return (
+    <button onClick={onClick} className="flex flex-col items-center gap-0.5 px-2 pt-1">
+      <IconComp size={19} style={{ color: active ? C.positive : C.faint }} />
+      <span style={{ color: active ? C.positive : C.faint }} className="text-[9px] font-medium">{label}</span>
+    </button>
+  );
+}
+function EmptyState({ text, small }) {
+  return <div style={{ border: `1px dashed ${C.border}`, color: C.faint }} className={`rounded-xl flex items-center justify-center text-center ${small ? 'py-6 text-xs' : 'py-10 text-sm'}`}>{text}</div>;
+}
+function ExpenseRow({ e, cat, onDelete, showDate }) {
+  const [confirm, setConfirm] = useState(false);
+  return (
+    <div className="flex items-center justify-between px-3.5 py-3">
+      <div className="flex items-center gap-2.5 min-w-0">
+        <span style={{ background: cat.color, width: 7, height: 7, borderRadius: 999, flexShrink: 0 }}></span>
+        <div className="min-w-0">
+          <div className="text-sm truncate" style={{ color: C.text }}>{e.note || cat.name}</div>
+          <div className="text-[11px]" style={{ color: C.faint }}>{cat.name}{showDate ? ` \u00b7 ${dayLabel(e.date)}` : ''} \u00b7 {e.time}</div>
+        </div>
+      </div>
+      <div className="flex items-center gap-2 flex-shrink-0">
+        <span className="font-mono text-sm font-medium" style={{ color: C.text }}>{fmt(e.amount)}</span>
+        {confirm ? <button onClick={onDelete} className="text-[10px] font-semibold px-1.5" style={{ color: C.danger }}>Confirm</button>
+          : <button onClick={() => setConfirm(true)}><Trash2 size={13} style={{ color: C.faint }} /></button>}
+      </div>
+    </div>
+  );
+}
+function Sheet({ title, onClose, children }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center">
+      <div onClick={onClose} style={{ background: 'rgba(0,0,0,0.55)' }} className="absolute inset-0"></div>
+      <div style={{ background: C.surface, borderTop: `1px solid ${C.border}` }} className="relative w-full max-w-md rounded-t-2xl px-5 pt-4 pb-8 max-h-[88vh] overflow-y-auto">
+        <div className="flex items-center justify-between mb-4">
+          <span className="text-sm font-semibold">{title}</span>
+          <button onClick={onClose}><X size={18} style={{ color: C.muted }} /></button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+function AddExpenseModal({ categories, defaultDate, onClose, onSave }) {
+  const [amount, setAmount] = useState('');
+  const [categoryId, setCategoryId] = useState(categories[0] ? categories[0].id : '');
+  const [note, setNote] = useState('');
+  const [date, setDate] = useState(defaultDate);
+  const now = new Date();
+  const [time, setTime] = useState(`${pad(now.getHours())}:${pad(now.getMinutes())}`);
+  return (
+    <Sheet title="Log an expense" onClose={onClose}>
+      <div className="flex flex-col gap-4">
+        <div>
+          <label style={{ color: C.faint }} className="text-[10px] font-semibold uppercase tracking-wider">Amount</label>
+          <div className="flex items-center mt-1.5">
+            <span className="font-mono text-2xl mr-1.5" style={{ color: C.muted }}>{'\u20B9'}</span>
+            <input type="number" inputMode="decimal" autoFocus placeholder="0" value={amount} onChange={e => setAmount(e.target.value)}
+              style={{ background: 'transparent', color: C.text }} className="font-mono text-2xl font-semibold w-full outline-none" />
+          </div>
+          <div style={{ height: 1, background: C.border }} className="mt-1"></div>
+        </div>
+        <div>
+          <label style={{ color: C.faint }} className="text-[10px] font-semibold uppercase tracking-wider">Category</label>
+          <div className="flex flex-wrap gap-2 mt-1.5">
+            {categories.map(c => (
+              <button key={c.id} onClick={() => setCategoryId(c.id)}
+                style={{ background: categoryId === c.id ? c.color : C.surface2, color: categoryId === c.id ? C.base : C.text, border: `1px solid ${categoryId === c.id ? c.color : C.border}` }}
+                className="px-3 py-1.5 rounded-full text-xs font-medium">{c.name}</button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <label style={{ color: C.faint }} className="text-[10px] font-semibold uppercase tracking-wider">What was it for?</label>
+          <input type="text" placeholder="e.g. Groceries, Movie tickets" value={note} onChange={e => setNote(e.target.value)}
+            style={{ background: C.surface2, color: C.text, border: `1px solid ${C.border}` }} className="w-full mt-1.5 rounded-lg px-3 py-2.5 text-sm outline-none" />
+        </div>
+        <div className="flex gap-3">
+          <div className="flex-1">
+            <label style={{ color: C.faint }} className="text-[10px] font-semibold uppercase tracking-wider">Date</label>
+            <input type="date" value={date} onChange={e => setDate(e.target.value)}
+              style={{ background: C.surface2, color: C.text, border: `1px solid ${C.border}`, colorScheme: 'dark' }} className="w-full mt-1.5 rounded-lg px-3 py-2.5 text-sm outline-none" />
+          </div>
+          <div className="flex-1">
+            <label style={{ color: C.faint }} className="text-[10px] font-semibold uppercase tracking-wider">Time</label>
+            <input type="time" value={time} onChange={e => setTime(e.target.value)}
+              style={{ background: C.surface2, color: C.text, border: `1px solid ${C.border}`, colorScheme: 'dark' }} className="w-full mt-1.5 rounded-lg px-3 py-2.5 text-sm outline-none" />
+          </div>
+        </div>
+        <button onClick={() => onSave({ amount, categoryId, note, date, time })} disabled={!amount || Number(amount) <= 0 || !categoryId}
+          style={{ background: (!amount || Number(amount) <= 0) ? C.surface2 : C.positive, color: (!amount || Number(amount) <= 0) ? C.faint : C.base }}
+          className="w-full py-3 rounded-xl text-sm font-semibold mt-1">Save entry</button>
+      </div>
+    </Sheet>
+  );
+}
+function BalanceModal({ current, onClose, onSave }) {
+  const [val, setVal] = useState(current === null ? '' : String(current));
+  return (
+    <Sheet title="Account balance" onClose={onClose}>
+      <div className="flex flex-col gap-4">
+        <div>
+          <label style={{ color: C.faint }} className="text-[10px] font-semibold uppercase tracking-wider">Current balance</label>
+          <div className="flex items-center mt-1.5">
+            <span className="font-mono text-2xl mr-1.5" style={{ color: C.muted }}>{'\u20B9'}</span>
+            <input type="number" inputMode="decimal" autoFocus placeholder="0" value={val} onChange={e => setVal(e.target.value)}
+              style={{ background: 'transparent', color: C.text }} className="font-mono text-2xl font-semibold w-full outline-none" />
+          </div>
+          <div style={{ height: 1, background: C.border }} className="mt-1"></div>
+          <div className="text-[11px] mt-2" style={{ color: C.faint }}>This is used to work out what's left after expenses each month.</div>
+        </div>
+        <button onClick={() => onSave(Number(val) || 0)} style={{ background: C.positive, color: C.base }} className="w-full py-3 rounded-xl text-sm font-semibold">Save balance</button>
+      </div>
+    </Sheet>
+  );
+}
+function CategoryModal({ category, onClose, onSave, onDelete }) {
+  const [name, setName] = useState(category ? category.name : '');
+  const [color, setColor] = useState(category ? category.color : SWATCHES[0]);
+  const [limit, setLimit] = useState(category && category.limit ? String(category.limit) : '');
+  const [confirmDel, setConfirmDel] = useState(false);
+  return (
+    <Sheet title={category ? 'Edit category' : 'New category'} onClose={onClose}>
+      <div className="flex flex-col gap-4">
+        <div>
+          <label style={{ color: C.faint }} className="text-[10px] font-semibold uppercase tracking-wider">Name</label>
+          <input type="text" placeholder="e.g. Travel" value={name} onChange={e => setName(e.target.value)}
+            style={{ background: C.surface2, color: C.text, border: `1px solid ${C.border}` }} className="w-full mt-1.5 rounded-lg px-3 py-2.5 text-sm outline-none" />
+        </div>
+        <div>
+          <label style={{ color: C.faint }} className="text-[10px] font-semibold uppercase tracking-wider">Color</label>
+          <div className="flex flex-wrap gap-2 mt-1.5">
+            {SWATCHES.map(s => (
+              <button key={s} onClick={() => setColor(s)}
+                style={{ background: s, width: 28, height: 28, borderRadius: 999, border: color === s ? `2px solid ${C.text}` : '2px solid transparent' }}></button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <label style={{ color: C.faint }} className="text-[10px] font-semibold uppercase tracking-wider">Monthly limit (optional)</label>
+          <div className="flex items-center mt-1.5">
+            <span className="font-mono text-lg mr-1.5" style={{ color: C.muted }}>{'\u20B9'}</span>
+            <input type="number" inputMode="decimal" placeholder="No limit" value={limit} onChange={e => setLimit(e.target.value)}
+              style={{ background: 'transparent', color: C.text }} className="font-mono text-lg w-full outline-none" />
+          </div>
+          <div style={{ height: 1, background: C.border }} className="mt-1"></div>
+          <div className="text-[11px] mt-2" style={{ color: C.faint }}>You'll get a notice at 80% and when you go over.</div>
+        </div>
+        <button onClick={() => onSave({ id: category ? category.id : uid(), name: name.trim() || 'Untitled', color, limit: Number(limit) || 0 })} disabled={!name.trim()}
+          style={{ background: !name.trim() ? C.surface2 : C.positive, color: !name.trim() ? C.faint : C.base }} className="w-full py-3 rounded-xl text-sm font-semibold">Save category</button>
+        {onDelete && (confirmDel
+          ? <button onClick={onDelete} style={{ color: C.danger, border: `1px solid ${C.danger}` }} className="w-full py-2.5 rounded-xl text-sm font-semibold">Confirm delete</button>
+          : <button onClick={() => setConfirmDel(true)} style={{ color: C.faint }} className="w-full py-1 text-xs font-medium">Delete category</button>)}
+      </div>
+    </Sheet>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<Ledger />);
+</script>
+
+<script>
+  // Manually transform the JSX source with the "classic" runtime so Babel
+  // outputs React.createElement(...) calls instead of an ES "import" statement
+  // (the automatic runtime, which some CDN Babel versions default to, injects
+  // an import that fails since this runs as a plain script, not a module).
+  var source = document.getElementById('app-source').textContent;
+  var compiled = Babel.transform(source, {
+    presets: [['react', { runtime: 'classic' }]]
+  }).code;
+  var script = document.createElement('script');
+  script.textContent = compiled;
+  document.body.appendChild(script);
+</script>
+</body>
+</html>
