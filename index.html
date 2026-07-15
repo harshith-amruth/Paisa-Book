@@ -306,7 +306,7 @@ function Ledger() {
   const dayEntries = useMemo(() => expenses.filter(e => e.date === selectedDay).sort((a, b) => (a.time < b.time ? 1 : -1)), [expenses, selectedDay]);
 
   if (!loaded) {
-    return <div style={{ background: C.base, color: C.muted }} className="min-h-screen flex items-center justify-center font-sans text-sm">Opening your paisa book\u2026</div>;
+    return <div style={{ background: C.base, color: C.muted }} className="min-h-screen flex items-center justify-center font-sans text-sm">{'Opening your paisa book\u2026'}</div>;
   }
 
   return (
@@ -560,7 +560,7 @@ function ExpenseRow({ e, cat, onDelete, showDate }) {
         <span style={{ background: cat.color, width: 7, height: 7, borderRadius: 999, flexShrink: 0 }}></span>
         <div className="min-w-0">
           <div className="text-sm truncate" style={{ color: C.text }}>{e.note || cat.name}</div>
-          <div className="text-[11px]" style={{ color: C.faint }}>{cat.name}{showDate ? ` \u00b7 ${dayLabel(e.date)}` : ''} \u00b7 {e.time}</div>
+          <div className="text-[11px]" style={{ color: C.faint }}>{cat.name}{showDate ? ` \u00b7 ${dayLabel(e.date)}` : ''}{' \u00b7 '}{e.time}</div>
         </div>
       </div>
       <div className="flex items-center gap-2 flex-shrink-0">
