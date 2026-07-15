@@ -527,7 +527,7 @@ function AddExpenseModal({ categories, defaultDate, onClose, onSave }) {
         <div>
           <label style={{ color: C.faint }} className="text-[10px] font-semibold uppercase tracking-wider">Amount</label>
           <div className="flex items-center mt-1.5">
-            <span className="font-mono text-2xl mr-1.5" style={{ color: C.muted }}>\u20B9</span>
+            <span className="font-mono text-2xl mr-1.5" style={{ color: C.muted }}>{'\u20B9'}</span>
             <input type="number" inputMode="decimal" autoFocus placeholder="0" value={amount} onChange={e => setAmount(e.target.value)}
               style={{ background: 'transparent', color: C.text }} className="font-mono text-2xl font-semibold w-full outline-none" />
           </div>
@@ -575,7 +575,7 @@ function BalanceModal({ current, onClose, onSave }) {
         <div>
           <label style={{ color: C.faint }} className="text-[10px] font-semibold uppercase tracking-wider">Current balance</label>
           <div className="flex items-center mt-1.5">
-            <span className="font-mono text-2xl mr-1.5" style={{ color: C.muted }}>\u20B9</span>
+            <span className="font-mono text-2xl mr-1.5" style={{ color: C.muted }}>{'\u20B9'}</span>
             <input type="number" inputMode="decimal" autoFocus placeholder="0" value={val} onChange={e => setVal(e.target.value)}
               style={{ background: 'transparent', color: C.text }} className="font-mono text-2xl font-semibold w-full outline-none" />
           </div>
@@ -612,7 +612,7 @@ function CategoryModal({ category, onClose, onSave, onDelete }) {
         <div>
           <label style={{ color: C.faint }} className="text-[10px] font-semibold uppercase tracking-wider">Monthly limit (optional)</label>
           <div className="flex items-center mt-1.5">
-            <span className="font-mono text-lg mr-1.5" style={{ color: C.muted }}>\u20B9</span>
+            <span className="font-mono text-lg mr-1.5" style={{ color: C.muted }}>{'\u20B9'}</span>
             <input type="number" inputMode="decimal" placeholder="No limit" value={limit} onChange={e => setLimit(e.target.value)}
               style={{ background: 'transparent', color: C.text }} className="font-mono text-lg w-full outline-none" />
           </div>
