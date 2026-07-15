@@ -57,7 +57,7 @@
   }
 </script>
 
-<script type="text/babel" data-presets="react">
+<script type="text/jsx-source" id="app-source">
 const { useState, useEffect, useMemo, useCallback } = React;
 
 // ---------- tiny inline icon set (replaces lucide-react for standalone use) ----------
@@ -630,6 +630,20 @@ function CategoryModal({ category, onClose, onSave, onDelete }) {
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(<Ledger />);
+</script>
+
+<script>
+  // Manually transform the JSX source with the "classic" runtime so Babel
+  // outputs React.createElement(...) calls instead of an ES "import" statement
+  // (the automatic runtime, which some CDN Babel versions default to, injects
+  // an import that fails since this runs as a plain script, not a module).
+  var source = document.getElementById('app-source').textContent;
+  var compiled = Babel.transform(source, {
+    presets: [['react', { runtime: 'classic' }]]
+  }).code;
+  var script = document.createElement('script');
+  script.textContent = compiled;
+  document.body.appendChild(script);
 </script>
 </body>
 </html>
