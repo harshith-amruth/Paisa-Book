@@ -82,6 +82,7 @@ const ChevronLeft = p => <Icon {...p}><polyline points="15,4 7,12 15,20"/></Icon
 const ChevronRight = p => <Icon {...p}><polyline points="9,4 17,12 9,20"/></Icon>;
 const Pencil = p => <Icon {...p}><path d="M4 20l4-1 12-12-3-3L5 16z"/></Icon>;
 const Wallet = p => <Icon {...p}><path d="M3 7h15a2 2 0 0 1 2 2v9H5a2 2 0 0 1-2-2z"/><path d="M3 7V6a2 2 0 0 1 2-2h11v3"/><circle cx="16" cy="13" r="1.4" fill="currentColor" stroke="none"/></Icon>;
+const Bell = p => <Icon {...p}><path d="M6 10a6 6 0 0 1 12 0c0 4 1.5 5.5 1.5 5.5H4.5S6 14 6 10z"/><path d="M10 19a2 2 0 0 0 4 0"/></Icon>;
 
 // ---------- design tokens ----------
 const C = {
@@ -153,15 +154,21 @@ function Ledger() {
   const [showBalance, setShowBalance] = useState(false);
   const [catModal, setCatModal] = useState(null);
   const [toast, setToast] = useState(null);
+  const [notifyFlags, setNotifyFlags] = useState({});
+  const [notifPermission, setNotifPermission] = useState(
+    typeof Notification !== 'undefined' ? Notification.permission : 'unsupported'
+  );
 
   useEffect(() => {
     (async () => {
-      const [cats, exps, settings] = await Promise.all([
+      const [cats, exps, settings, flags] = await Promise.all([
         loadKey('categories', DEFAULT_CATEGORIES),
         loadKey('expenses', []),
         loadKey('settings', { balance: null }),
+        loadKey('notifyFlags', {}),
       ]);
       setCategories(cats); setExpenses(exps); setBalance(settings.balance);
+      setNotifyFlags(flags);
       setLoaded(true);
     })();
   }, []);
@@ -169,11 +176,35 @@ function Ledger() {
   useEffect(() => { if (loaded) saveKey('categories', categories); }, [categories, loaded]);
   useEffect(() => { if (loaded) saveKey('expenses', expenses); }, [expenses, loaded]);
   useEffect(() => { if (loaded) saveKey('settings', { balance }); }, [balance, loaded]);
+  useEffect(() => { if (loaded) saveKey('notifyFlags', notifyFlags); }, [notifyFlags, loaded]);
 
   const showToast = useCallback((type, msg) => {
     setToast({ type, msg, id: uid() });
     setTimeout(() => setToast(t => (t && t.msg === msg ? null : t)), 3800);
   }, []);
+
+  const requestNotifications = useCallback(() => {
+    if (typeof Notification === 'undefined') return;
+    Notification.requestPermission().then(p => setNotifPermission(p));
+  }, []);
+
+  const sendSystemNotification = useCallback(async (title, body, tag) => {
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+    try {
+      if ('serviceWorker' in navigator) {
+        const reg = await navigator.serviceWorker.ready;
+        reg.showNotification(title, { body, icon: 'icon-192.png', badge: 'icon-192.png', tag });
+      } else {
+        new Notification(title, { body, icon: 'icon-192.png' });
+      }
+    } catch (e) { /* notifications not available, ignore */ }
+  }, []);
+
+  const maybeNotify = useCallback((key, condition, title, body) => {
+    if (!condition || notifyFlags[key]) return;
+    sendSystemNotification(title, body, key);
+    setNotifyFlags(prev => ({ ...prev, [key]: true }));
+  }, [notifyFlags, sendSystemNotification]);
 
   const getCategory = useCallback(id => categories.find(c => c.id === id) || { name: 'Uncategorized', color: C.faint, limit: 0 }, [categories]);
 
@@ -184,6 +215,29 @@ function Ledger() {
 
   const spentThisMonth = spentInMonth(thisMonthKey);
   const remaining = balance === null ? null : balance - spentThisMonth;
+
+  // Watch category spend and push a phone notification the moment a limit is crossed
+  useEffect(() => {
+    if (!loaded) return;
+    categories.forEach(cat => {
+      if (!cat.limit || cat.limit <= 0) return;
+      const spent = spentInMonth(thisMonthKey, cat.id);
+      const pct = spent / cat.limit;
+      maybeNotify(`category:${cat.id}:${thisMonthKey}:100`, pct >= 1,
+        `Over budget: ${cat.name}`, `You've spent ${fmt(spent)} of your ${fmt(cat.limit)} limit this month.`);
+      maybeNotify(`category:${cat.id}:${thisMonthKey}:80`, pct >= 0.8 && pct < 1,
+        `Nearing your ${cat.name} limit`, `You've used ${Math.round(pct * 100)}% of this month's ${fmt(cat.limit)} budget.`);
+    });
+  }, [expenses, categories, loaded, thisMonthKey]);
+
+  // Watch overall balance and push a phone notification when it's running low or gone
+  useEffect(() => {
+    if (!loaded || balance === null || balance <= 0) return;
+    maybeNotify(`balance:${thisMonthKey}:zero`, remaining <= 0,
+      'Balance used up', `You've spent your full balance of ${fmt(balance)} for this month.`);
+    maybeNotify(`balance:${thisMonthKey}:low`, remaining > 0 && remaining <= balance * 0.15,
+      'Balance running low', `Only ${fmt(remaining)} left out of ${fmt(balance)} this month.`);
+  }, [expenses, balance, loaded, thisMonthKey]);
 
   function addExpense({ amount, categoryId, note, date, time }) {
     const amt = Number(amount);
@@ -281,6 +335,23 @@ function Ledger() {
 
         {tab === 'home' && (
           <div className="px-5 mt-3 flex flex-col gap-5">
+            {notifPermission === 'default' && (
+              <div style={{ background: C.surface, border: `1px solid ${C.borderSoft}` }} className="rounded-xl px-4 py-3 flex items-center gap-3">
+                <Bell size={18} style={{ color: C.positive, flexShrink: 0 }} />
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-medium" style={{ color: C.text }}>Get alerts on your phone</div>
+                  <div className="text-[11px]" style={{ color: C.faint }}>Nearing a limit or running low on balance</div>
+                </div>
+                <button onClick={requestNotifications} style={{ background: C.positive, color: C.base }} className="text-xs font-semibold px-3 py-1.5 rounded-full flex-shrink-0">Enable</button>
+              </div>
+            )}
+            {notifPermission === 'denied' && (
+              <div style={{ background: C.surface, border: `1px solid ${C.borderSoft}` }} className="rounded-xl px-4 py-3 flex items-center gap-3">
+                <Bell size={18} style={{ color: C.faint, flexShrink: 0 }} />
+                <div className="text-[11px]" style={{ color: C.faint }}>Notifications are blocked. Enable them for this app in your phone's Settings to get limit and balance alerts.</div>
+              </div>
+            )}
+
             <div onClick={() => setShowBalance(true)} style={{ background: C.surface, border: `1px dashed ${C.border}` }} className="rounded-2xl p-5 cursor-pointer">
               {balance === null ? (
                 <div className="flex flex-col items-center text-center gap-1 py-2">
