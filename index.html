@@ -93,11 +93,12 @@ const C = {
   sky: '#5FB4E8', violet: '#B18CF0',
 };
 const SWATCHES = ['#4ADE9C', '#5FB4E8', '#B18CF0', '#F5B049', '#F0665A', '#F17FB3', '#7DD3FC', '#FCD34D'];
+const ICONS = ['\uD83C\uDFE0', '\uD83C\uDF54', '\uD83D\uDE97', '\uD83C\uDFAC', '\uD83D\uDCA1', '\uD83D\uDED2', '\uD83D\uDCB0', '\uD83C\uDFE5', '\uD83D\uDCDA', '\u2708\uFE0F', '\uD83C\uDF93', '\uD83D\uDC55', '\uD83D\uDCF1', '\uD83D\uDC3E', '\uD83C\uDF81', '\u26A1'];
 const DEFAULT_CATEGORIES = [
-  { id: 'household', name: 'Household', color: '#4ADE9C', limit: 0 },
-  { id: 'entertainment', name: 'Entertainment', color: '#B18CF0', limit: 0 },
-  { id: 'food', name: 'Food & Dining', color: '#F5B049', limit: 0 },
-  { id: 'transport', name: 'Transport', color: '#5FB4E8', limit: 0 },
+  { id: 'household', name: 'Household', color: '#4ADE9C', limit: 0, icon: ICONS[0], subcategories: [] },
+  { id: 'entertainment', name: 'Entertainment', color: '#B18CF0', limit: 0, icon: ICONS[3], subcategories: [] },
+  { id: 'food', name: 'Food & Dining', color: '#F5B049', limit: 0, icon: ICONS[1], subcategories: [] },
+  { id: 'transport', name: 'Transport', color: '#5FB4E8', limit: 0, icon: ICONS[2], subcategories: [] },
 ];
 
 // ---------- date helpers ----------
@@ -206,7 +207,12 @@ function Ledger() {
     setNotifyFlags(prev => ({ ...prev, [key]: true }));
   }, [notifyFlags, sendSystemNotification]);
 
-  const getCategory = useCallback(id => categories.find(c => c.id === id) || { name: 'Uncategorized', color: C.faint, limit: 0 }, [categories]);
+  const getCategory = useCallback(id => categories.find(c => c.id === id) || { name: 'Uncategorized', color: C.faint, limit: 0, icon: '\uD83D\uDCB8', subcategories: [] }, [categories]);
+  const getSubcategoryName = useCallback((cat, subId) => {
+    if (!subId || !cat || !cat.subcategories) return null;
+    const s = cat.subcategories.find(x => x.id === subId);
+    return s ? s.name : null;
+  }, []);
 
   const thisMonthKey = monthKeyOf(todayKey);
   const spentInMonth = useCallback((mKey, categoryId) => expenses
@@ -239,10 +245,10 @@ function Ledger() {
       'Balance running low', `Only ${fmt(remaining)} left out of ${fmt(balance)} this month.`);
   }, [expenses, balance, loaded, thisMonthKey]);
 
-  function addExpense({ amount, categoryId, note, date, time }) {
+  function addExpense({ amount, categoryId, subcategoryId, note, date, time }) {
     const amt = Number(amount);
     if (!amt || amt <= 0) return;
-    const entry = { id: uid(), amount: amt, categoryId, note: note.trim(), date, time };
+    const entry = { id: uid(), amount: amt, categoryId, subcategoryId: subcategoryId || null, note: note.trim(), date, time };
     setExpenses(prev => [...prev, entry]);
     const cat = getCategory(categoryId);
     if (cat.limit > 0) {
@@ -301,6 +307,28 @@ function Ledger() {
       cells.push({ key, d, total: totals[key] || 0 });
     }
     return { cells, maxDay };
+  }, [calMonth, expenses]);
+
+  const monthStats = useMemo(() => {
+    const y = calMonth.getFullYear(), m = calMonth.getMonth();
+    const mKey = `${y}-${pad(m + 1)}`;
+    const total = spentInMonth(mKey);
+    const daysInMonth = new Date(y, m + 1, 0).getDate();
+    const isCurrentMonth = mKey === thisMonthKey;
+    const elapsedDays = isCurrentMonth ? new Date().getDate() : daysInMonth;
+    const avgDaily = elapsedDays > 0 ? total / elapsedDays : 0;
+
+    const totals = {};
+    expenses.forEach(e => { if (monthKeyOf(e.date) === mKey) totals[e.date] = (totals[e.date] || 0) + Number(e.amount); });
+    let highestDate = null, highestAmt = 0;
+    Object.entries(totals).forEach(([d, amt]) => { if (amt > highestAmt) { highestAmt = amt; highestDate = d; } });
+
+    const prevRef = new Date(y, m - 1, 1);
+    const prevKey = `${prevRef.getFullYear()}-${pad(prevRef.getMonth() + 1)}`;
+    const prevTotal = spentInMonth(prevKey);
+    const change = prevTotal > 0 ? ((total - prevTotal) / prevTotal) * 100 : null;
+
+    return { total, avgDaily, highestDate, highestAmt, change };
   }, [calMonth, expenses]);
 
   const dayEntries = useMemo(() => expenses.filter(e => e.date === selectedDay).sort((a, b) => (a.time < b.time ? 1 : -1)), [expenses, selectedDay]);
@@ -390,8 +418,8 @@ function Ledger() {
                     return (
                       <div key={cat.id} style={{ background: C.surface, border: `1px solid ${C.borderSoft}` }} className="rounded-xl px-3.5 py-3">
                         <div className="flex items-center justify-between mb-1.5">
-                          <div className="flex items-center gap-2">
-                            <span style={{ background: cat.color, width: 8, height: 8, borderRadius: 999 }}></span>
+                          <div className="flex items-center gap-2.5">
+                            <IconBadge icon={cat.icon} color={cat.color} size={26} />
                             <span className="text-sm font-medium">{cat.name}</span>
                           </div>
                           <span className="font-mono text-xs" style={{ color: C.muted }}>{fmt(spent)}{cat.limit > 0 ? ` / ${fmt(cat.limit)}` : ''}</span>
@@ -412,7 +440,7 @@ function Ledger() {
               <div style={{ color: C.faint }} className="text-[10px] font-semibold uppercase tracking-wider mb-2 px-1">Recent activity</div>
               {recent.length === 0 ? <EmptyState text="No entries yet. Log your first expense below." /> : (
                 <div style={{ background: C.surface, border: `1px solid ${C.borderSoft}` }} className="rounded-xl divide-y">
-                  {recent.map(e => <ExpenseRow key={e.id} e={e} cat={getCategory(e.categoryId)} onDelete={() => deleteExpense(e.id)} />)}
+                  {recent.map(e => { const c = getCategory(e.categoryId); return <ExpenseRow key={e.id} e={e} cat={c} sub={getSubcategoryName(c, e.subcategoryId)} onDelete={() => deleteExpense(e.id)} />; })}
                 </div>
               )}
             </div>
@@ -439,7 +467,7 @@ function Ledger() {
                         <span className="font-mono text-xs" style={{ color: C.muted }}>{fmt(total)}</span>
                       </div>
                       <div style={{ background: C.surface, border: `1px solid ${C.borderSoft}` }} className="rounded-xl divide-y">
-                        {items.map(e => <ExpenseRow key={e.id} e={e} cat={getCategory(e.categoryId)} onDelete={() => deleteExpense(e.id)} showDate={groupBy !== 'day'} />)}
+                        {items.map(e => { const c = getCategory(e.categoryId); return <ExpenseRow key={e.id} e={e} cat={c} sub={getSubcategoryName(c, e.subcategoryId)} onDelete={() => deleteExpense(e.id)} showDate={groupBy !== 'day'} />; })}
                       </div>
                     </div>
                   );
@@ -475,6 +503,36 @@ function Ledger() {
                 );
               })}
             </div>
+
+            <div className="mt-5 rounded-xl px-4 py-4" style={{ background: C.surface, border: `1px solid ${C.borderSoft}` }}>
+              <div style={{ color: C.faint }} className="text-[10px] font-semibold uppercase tracking-wider">Monthly spend</div>
+              <div className="flex items-end gap-2 mt-1">
+                <span className="font-mono text-2xl font-semibold" style={{ color: C.text }}>{fmt(monthStats.total)}</span>
+                {monthStats.change !== null && (
+                  <span className="text-xs font-medium mb-1" style={{ color: monthStats.change >= 0 ? C.danger : C.positive }}>
+                    {monthStats.change >= 0 ? '\u25B2' : '\u25BC'} {Math.abs(Math.round(monthStats.change))}%
+                  </span>
+                )}
+                {monthStats.change === null && monthStats.total > 0 && (
+                  <span className="text-xs font-medium mb-1" style={{ color: C.faint }}>New</span>
+                )}
+              </div>
+              <div style={{ color: C.faint }} className="text-[10px] mt-0.5">vs last month</div>
+            </div>
+            <div className="flex gap-3 mt-3">
+              <div style={{ background: C.surface, border: `1px solid ${C.borderSoft}` }} className="flex-1 rounded-xl px-4 py-3">
+                <div style={{ color: C.faint }} className="text-[10px] font-semibold uppercase tracking-wider">Highest day</div>
+                <div className="font-mono text-sm font-semibold mt-1" style={{ color: monthStats.highestDate ? C.warning : C.faint }}>
+                  {monthStats.highestDate ? dayLabel(monthStats.highestDate) : '\u2014'}
+                </div>
+                {monthStats.highestDate && <div className="text-[11px] mt-0.5" style={{ color: C.muted }}>{fmt(monthStats.highestAmt)}</div>}
+              </div>
+              <div style={{ background: C.surface, border: `1px solid ${C.borderSoft}` }} className="flex-1 rounded-xl px-4 py-3">
+                <div style={{ color: C.faint }} className="text-[10px] font-semibold uppercase tracking-wider">Avg daily</div>
+                <div className="font-mono text-sm font-semibold mt-1" style={{ color: C.text }}>{fmt(monthStats.avgDaily)}</div>
+              </div>
+            </div>
+
             <div className="mt-5">
               <div className="flex items-center justify-between mb-2 px-1">
                 <span className="text-xs font-semibold">{dayLabel(selectedDay)}</span>
@@ -484,7 +542,7 @@ function Ledger() {
               </div>
               {dayEntries.length === 0 ? <EmptyState text="Nothing logged for this day." small /> : (
                 <div style={{ background: C.surface, border: `1px solid ${C.borderSoft}` }} className="rounded-xl divide-y">
-                  {dayEntries.map(e => <ExpenseRow key={e.id} e={e} cat={getCategory(e.categoryId)} onDelete={() => deleteExpense(e.id)} />)}
+                  {dayEntries.map(e => { const c = getCategory(e.categoryId); return <ExpenseRow key={e.id} e={e} cat={c} sub={getSubcategoryName(c, e.subcategoryId)} onDelete={() => deleteExpense(e.id)} />; })}
                 </div>
               )}
             </div>
@@ -498,11 +556,13 @@ function Ledger() {
                 const spent = spentInMonth(thisMonthKey, cat.id);
                 return (
                   <div key={cat.id} onClick={() => setCatModal(cat)} style={{ background: C.surface, border: `1px solid ${C.borderSoft}` }} className="rounded-xl px-4 py-3 flex items-center justify-between cursor-pointer">
-                    <div className="flex items-center gap-2.5">
-                      <span style={{ background: cat.color, width: 10, height: 10, borderRadius: 999 }}></span>
+                    <div className="flex items-center gap-3">
+                      <IconBadge icon={cat.icon} color={cat.color} size={36} />
                       <div>
                         <div className="text-sm font-medium">{cat.name}</div>
-                        <div className="text-[11px]" style={{ color: C.faint }}>{cat.limit > 0 ? `Limit ${fmt(cat.limit)}/mo` : 'No limit set'}</div>
+                        <div className="text-[11px]" style={{ color: C.faint }}>
+                          {[cat.limit > 0 ? `Limit ${fmt(cat.limit)}/mo` : 'No limit set', cat.subcategories && cat.subcategories.length > 0 ? `${cat.subcategories.length} subcategories` : null].filter(Boolean).join(' \u00b7 ')}
+                        </div>
                       </div>
                     </div>
                     <div className="text-right flex items-center gap-2">
@@ -552,15 +612,23 @@ function NavBtn({ icon: IconComp, label, active, onClick }) {
 function EmptyState({ text, small }) {
   return <div style={{ border: `1px dashed ${C.border}`, color: C.faint }} className={`rounded-xl flex items-center justify-center text-center ${small ? 'py-6 text-xs' : 'py-10 text-sm'}`}>{text}</div>;
 }
-function ExpenseRow({ e, cat, onDelete, showDate }) {
+function IconBadge({ icon, color, size = 32 }) {
+  return (
+    <div style={{ background: color + '26', width: size, height: size, borderRadius: size * 0.32, flexShrink: 0 }} className="flex items-center justify-center">
+      <span style={{ fontSize: size * 0.5, lineHeight: 1 }}>{icon || '\uD83D\uDCB8'}</span>
+    </div>
+  );
+}
+function ExpenseRow({ e, cat, sub, onDelete, showDate }) {
   const [confirm, setConfirm] = useState(false);
+  const meta = [cat.name, sub, showDate ? dayLabel(e.date) : null, e.time].filter(Boolean).join(' \u00b7 ');
   return (
     <div className="flex items-center justify-between px-3.5 py-3">
-      <div className="flex items-center gap-2.5 min-w-0">
-        <span style={{ background: cat.color, width: 7, height: 7, borderRadius: 999, flexShrink: 0 }}></span>
+      <div className="flex items-center gap-3 min-w-0">
+        <IconBadge icon={cat.icon} color={cat.color} size={30} />
         <div className="min-w-0">
           <div className="text-sm truncate" style={{ color: C.text }}>{e.note || cat.name}</div>
-          <div className="text-[11px]" style={{ color: C.faint }}>{cat.name}{showDate ? ` \u00b7 ${dayLabel(e.date)}` : ''}{' \u00b7 '}{e.time}</div>
+          <div className="text-[11px] truncate" style={{ color: C.faint }}>{meta}</div>
         </div>
       </div>
       <div className="flex items-center gap-2 flex-shrink-0">
@@ -588,10 +656,19 @@ function Sheet({ title, onClose, children }) {
 function AddExpenseModal({ categories, defaultDate, onClose, onSave }) {
   const [amount, setAmount] = useState('');
   const [categoryId, setCategoryId] = useState(categories[0] ? categories[0].id : '');
+  const [subcategoryId, setSubcategoryId] = useState('');
   const [note, setNote] = useState('');
   const [date, setDate] = useState(defaultDate);
   const now = new Date();
   const [time, setTime] = useState(`${pad(now.getHours())}:${pad(now.getMinutes())}`);
+  const selectedCat = categories.find(c => c.id === categoryId);
+  const subOptions = (selectedCat && selectedCat.subcategories) || [];
+
+  function pickCategory(id) {
+    setCategoryId(id);
+    setSubcategoryId('');
+  }
+
   return (
     <Sheet title="Log an expense" onClose={onClose}>
       <div className="flex flex-col gap-4">
@@ -608,12 +685,27 @@ function AddExpenseModal({ categories, defaultDate, onClose, onSave }) {
           <label style={{ color: C.faint }} className="text-[10px] font-semibold uppercase tracking-wider">Category</label>
           <div className="flex flex-wrap gap-2 mt-1.5">
             {categories.map(c => (
-              <button key={c.id} onClick={() => setCategoryId(c.id)}
+              <button key={c.id} onClick={() => pickCategory(c.id)}
                 style={{ background: categoryId === c.id ? c.color : C.surface2, color: categoryId === c.id ? C.base : C.text, border: `1px solid ${categoryId === c.id ? c.color : C.border}` }}
-                className="px-3 py-1.5 rounded-full text-xs font-medium">{c.name}</button>
+                className="px-3 py-1.5 rounded-full text-xs font-medium">{c.icon ? c.icon + ' ' : ''}{c.name}</button>
             ))}
           </div>
         </div>
+        {subOptions.length > 0 && (
+          <div>
+            <label style={{ color: C.faint }} className="text-[10px] font-semibold uppercase tracking-wider">Subcategory</label>
+            <div className="flex flex-wrap gap-2 mt-1.5">
+              <button onClick={() => setSubcategoryId('')}
+                style={{ background: subcategoryId === '' ? C.text : C.surface2, color: subcategoryId === '' ? C.base : C.muted, border: `1px solid ${subcategoryId === '' ? C.text : C.border}` }}
+                className="px-3 py-1.5 rounded-full text-xs font-medium">General</button>
+              {subOptions.map(s => (
+                <button key={s.id} onClick={() => setSubcategoryId(s.id)}
+                  style={{ background: subcategoryId === s.id ? selectedCat.color : C.surface2, color: subcategoryId === s.id ? C.base : C.text, border: `1px solid ${subcategoryId === s.id ? selectedCat.color : C.border}` }}
+                  className="px-3 py-1.5 rounded-full text-xs font-medium">{s.name}</button>
+              ))}
+            </div>
+          </div>
+        )}
         <div>
           <label style={{ color: C.faint }} className="text-[10px] font-semibold uppercase tracking-wider">What was it for?</label>
           <input type="text" placeholder="e.g. Groceries, Movie tickets" value={note} onChange={e => setNote(e.target.value)}
@@ -631,7 +723,7 @@ function AddExpenseModal({ categories, defaultDate, onClose, onSave }) {
               style={{ background: C.surface2, color: C.text, border: `1px solid ${C.border}`, colorScheme: 'dark' }} className="w-full mt-1.5 rounded-lg px-3 py-2.5 text-sm outline-none" />
           </div>
         </div>
-        <button onClick={() => onSave({ amount, categoryId, note, date, time })} disabled={!amount || Number(amount) <= 0 || !categoryId}
+        <button onClick={() => onSave({ amount, categoryId, subcategoryId, note, date, time })} disabled={!amount || Number(amount) <= 0 || !categoryId}
           style={{ background: (!amount || Number(amount) <= 0) ? C.surface2 : C.positive, color: (!amount || Number(amount) <= 0) ? C.faint : C.base }}
           className="w-full py-3 rounded-xl text-sm font-semibold mt-1">Save entry</button>
       </div>
@@ -661,8 +753,20 @@ function BalanceModal({ current, onClose, onSave }) {
 function CategoryModal({ category, onClose, onSave, onDelete }) {
   const [name, setName] = useState(category ? category.name : '');
   const [color, setColor] = useState(category ? category.color : SWATCHES[0]);
+  const [icon, setIcon] = useState(category && category.icon ? category.icon : ICONS[0]);
   const [limit, setLimit] = useState(category && category.limit ? String(category.limit) : '');
+  const [subcats, setSubcats] = useState((category && category.subcategories) || []);
+  const [newSub, setNewSub] = useState('');
   const [confirmDel, setConfirmDel] = useState(false);
+
+  function addSub() {
+    const val = newSub.trim();
+    if (!val) return;
+    setSubcats(prev => [...prev, { id: uid(), name: val }]);
+    setNewSub('');
+  }
+  function removeSub(id) { setSubcats(prev => prev.filter(s => s.id !== id)); }
+
   return (
     <Sheet title={category ? 'Edit category' : 'New category'} onClose={onClose}>
       <div className="flex flex-col gap-4">
@@ -670,6 +774,16 @@ function CategoryModal({ category, onClose, onSave, onDelete }) {
           <label style={{ color: C.faint }} className="text-[10px] font-semibold uppercase tracking-wider">Name</label>
           <input type="text" placeholder="e.g. Travel" value={name} onChange={e => setName(e.target.value)}
             style={{ background: C.surface2, color: C.text, border: `1px solid ${C.border}` }} className="w-full mt-1.5 rounded-lg px-3 py-2.5 text-sm outline-none" />
+        </div>
+        <div>
+          <label style={{ color: C.faint }} className="text-[10px] font-semibold uppercase tracking-wider">Icon</label>
+          <div className="flex flex-wrap gap-2 mt-1.5">
+            {ICONS.map(ic => (
+              <button key={ic} onClick={() => setIcon(ic)}
+                style={{ background: icon === ic ? color + '33' : C.surface2, border: `1px solid ${icon === ic ? color : C.border}`, width: 36, height: 36, borderRadius: 10 }}
+                className="flex items-center justify-center text-lg">{ic}</button>
+            ))}
+          </div>
         </div>
         <div>
           <label style={{ color: C.faint }} className="text-[10px] font-semibold uppercase tracking-wider">Color</label>
@@ -690,7 +804,28 @@ function CategoryModal({ category, onClose, onSave, onDelete }) {
           <div style={{ height: 1, background: C.border }} className="mt-1"></div>
           <div className="text-[11px] mt-2" style={{ color: C.faint }}>You'll get a notice at 80% and when you go over.</div>
         </div>
-        <button onClick={() => onSave({ id: category ? category.id : uid(), name: name.trim() || 'Untitled', color, limit: Number(limit) || 0 })} disabled={!name.trim()}
+        <div>
+          <label style={{ color: C.faint }} className="text-[10px] font-semibold uppercase tracking-wider">Subcategories (optional)</label>
+          <div className="text-[11px] mt-1" style={{ color: C.faint }}>e.g. under Household: Kirana, Electricity Bills</div>
+          {subcats.length > 0 && (
+            <div className="flex flex-wrap gap-2 mt-2">
+              {subcats.map(s => (
+                <span key={s.id} style={{ background: C.surface2, border: `1px solid ${C.border}`, color: C.text }} className="pl-3 pr-1.5 py-1 rounded-full text-xs font-medium flex items-center gap-1">
+                  {s.name}
+                  <button onClick={() => removeSub(s.id)} style={{ color: C.faint }} className="p-0.5"><X size={11} /></button>
+                </span>
+              ))}
+            </div>
+          )}
+          <div className="flex gap-2 mt-2">
+            <input type="text" placeholder="e.g. Kirana" value={newSub}
+              onChange={e => setNewSub(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addSub(); } }}
+              style={{ background: C.surface2, color: C.text, border: `1px solid ${C.border}` }} className="flex-1 rounded-lg px-3 py-2 text-sm outline-none" />
+            <button onClick={addSub} style={{ background: C.surface2, border: `1px solid ${C.border}`, color: C.text }} className="px-3 rounded-lg text-sm font-medium">Add</button>
+          </div>
+        </div>
+        <button onClick={() => onSave({ id: category ? category.id : uid(), name: name.trim() || 'Untitled', color, icon, limit: Number(limit) || 0, subcategories: subcats })} disabled={!name.trim()}
           style={{ background: !name.trim() ? C.surface2 : C.positive, color: !name.trim() ? C.faint : C.base }} className="w-full py-3 rounded-xl text-sm font-semibold">Save category</button>
         {onDelete && (confirmDel
           ? <button onClick={onDelete} style={{ color: C.danger, border: `1px solid ${C.danger}` }} className="w-full py-2.5 rounded-xl text-sm font-semibold">Confirm delete</button>
