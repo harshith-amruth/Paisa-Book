@@ -170,25 +170,21 @@ function Ledger() {
   const [balance, setBalance] = useState(null);
 
   const [tab, setTab] = useState('home');
-  const awayFromHomeRef = useRef(false);
-
-  const goToTab = useCallback((t) => {
-    if (t === 'home') {
-      awayFromHomeRef.current = false;
-      setTab('home');
-    } else {
-      if (!awayFromHomeRef.current) {
-        window.history.pushState({ ledgerNav: true }, '', '#app');
-        awayFromHomeRef.current = true;
-      }
-      setTab(t);
-    }
-  }, []);
+  const goToTab = setTab; // plain tab switch; back-button handling is global (see effect below)
 
   useEffect(() => {
+    // Maintain exactly one "buffer" history entry. Hardware/back-gesture pops it:
+    // if we're not on Home, land on Home and re-arm the buffer (so back is caught again);
+    // if we're already on Home, don't re-arm, so the *next* back press exits normally.
+    window.history.pushState({ ledgerBuffer: true }, '', window.location.href);
     const handlePop = () => {
-      awayFromHomeRef.current = false;
-      setTab('home');
+      setTab(current => {
+        if (current !== 'home') {
+          window.history.pushState({ ledgerBuffer: true }, '', window.location.href);
+          return 'home';
+        }
+        return current;
+      });
     };
     window.addEventListener('popstate', handlePop);
     return () => window.removeEventListener('popstate', handlePop);
@@ -199,9 +195,11 @@ function Ledger() {
 
   const [showAdd, setShowAdd] = useState(false);
   const [addPrefillDate, setAddPrefillDate] = useState(todayKey);
+  const [addPrefillCategory, setAddPrefillCategory] = useState(null);
   const [showBalance, setShowBalance] = useState(false);
   const [showAddMoney, setShowAddMoney] = useState(null); // null | { mode: 'balance' } | { mode: 'category', category }
   const [catModal, setCatModal] = useState(null);
+  const [categoryDetail, setCategoryDetail] = useState(null);
   const [toast, setToast] = useState(null);
   const [notifyFlags, setNotifyFlags] = useState({});
   const [notifPermission, setNotifPermission] = useState(
@@ -609,7 +607,7 @@ function Ledger() {
             <div className="mt-5">
               <div className="flex items-center justify-between mb-2 px-1">
                 <span className="text-xs font-semibold">{dayLabel(selectedDay)}</span>
-                <button onClick={() => { setAddPrefillDate(selectedDay); setShowAdd(true); }} className="flex items-center gap-1 text-xs font-medium" style={{ color: C.positive }}>
+                <button onClick={() => { setAddPrefillDate(selectedDay); setAddPrefillCategory(null); setShowAdd(true); }} className="flex items-center gap-1 text-xs font-medium" style={{ color: C.positive }}>
                   <Plus size={13} /> Add entry
                 </button>
               </div>
@@ -628,7 +626,7 @@ function Ledger() {
               {categories.map(cat => {
                 const spent = spentInMonth(thisMonthKey, cat.id);
                 return (
-                  <div key={cat.id} onClick={() => setCatModal(cat)} style={{ background: C.surface, border: `1px solid ${C.borderSoft}` }} className="rounded-xl px-4 py-3 flex items-center justify-between cursor-pointer">
+                  <div key={cat.id} onClick={() => setCategoryDetail(cat)} style={{ background: C.surface, border: `1px solid ${C.borderSoft}` }} className="rounded-xl px-4 py-3 flex items-center justify-between cursor-pointer">
                     <div className="flex items-center gap-3">
                       <IconBadge icon={cat.icon} color={cat.color} size={36} />
                       <div>
@@ -641,7 +639,7 @@ function Ledger() {
                     <div className="text-right flex items-center gap-2">
                       <span className="font-mono text-xs" style={{ color: C.muted }}>{fmt(spent)}</span>
                       <button onClick={e => { e.stopPropagation(); setShowAddMoney({ mode: 'category', category: cat }); }} style={{ color: C.positive }} className="p-0.5"><Plus size={14} /></button>
-                      <Pencil size={13} style={{ color: C.faint }} />
+                      <button onClick={e => { e.stopPropagation(); setCatModal(cat); }} className="p-0.5"><Pencil size={13} style={{ color: C.faint }} /></button>
                     </div>
                   </div>
                 );
@@ -660,14 +658,14 @@ function Ledger() {
             <div className="w-14"></div>
             <NavBtn icon={CalendarIcon} label="Calendar" active={tab === 'calendar'} onClick={() => goToTab('calendar')} />
             <NavBtn icon={Tag} label="Categories" active={tab === 'categories'} onClick={() => goToTab('categories')} />
-            <button onClick={() => { setAddPrefillDate(todayKey); setShowAdd(true); }} style={{ background: C.positive }}
+            <button onClick={() => { setAddPrefillDate(todayKey); setAddPrefillCategory(null); setShowAdd(true); }} style={{ background: C.positive }}
               className="absolute left-1/2 -translate-x-1/2 -top-5 w-14 h-14 rounded-full flex items-center justify-center shadow-lg">
               <Plus size={24} style={{ color: C.base }} />
             </button>
           </div>
         </div>
 
-        {showAdd && <AddExpenseModal categories={categories} defaultDate={addPrefillDate} onClose={() => setShowAdd(false)} onSave={addExpense} />}
+        {showAdd && <AddExpenseModal categories={categories} defaultDate={addPrefillDate} defaultCategoryId={addPrefillCategory} onClose={() => setShowAdd(false)} onSave={addExpense} />}
         {showBalance && <BalanceModal current={balance} onClose={() => setShowBalance(false)} onSave={v => { setBalance(v); setShowBalance(false); }} />}
         {showAddMoney && (
           <AddMoneyModal
@@ -678,6 +676,19 @@ function Ledger() {
           />
         )}
         {catModal && <CategoryModal category={catModal === 'new' ? null : catModal} onClose={() => setCatModal(null)} onSave={saveCategory} onDelete={catModal !== 'new' ? () => deleteCategory(catModal.id) : null} />}
+        {categoryDetail && (
+          <CategoryDetailSheet
+            category={categoryDetail}
+            expenses={expenses}
+            spent={spentInMonth(thisMonthKey, categoryDetail.id)}
+            getSubcategoryName={getSubcategoryName}
+            onClose={() => setCategoryDetail(null)}
+            onDeleteExpense={deleteExpense}
+            onEdit={() => { setCatModal(categoryDetail); setCategoryDetail(null); }}
+            onAddMoney={() => { setShowAddMoney({ mode: 'category', category: categoryDetail }); setCategoryDetail(null); }}
+            onAddExpense={() => { setAddPrefillDate(todayKey); setAddPrefillCategory(categoryDetail.id); setShowAdd(true); setCategoryDetail(null); }}
+          />
+        )}
       </div>
     </div>
   );
@@ -736,9 +747,9 @@ function Sheet({ title, onClose, children }) {
     </div>
   );
 }
-function AddExpenseModal({ categories, defaultDate, onClose, onSave }) {
+function AddExpenseModal({ categories, defaultDate, defaultCategoryId, onClose, onSave }) {
   const [amount, setAmount] = useState('');
-  const [categoryId, setCategoryId] = useState(categories[0] ? categories[0].id : '');
+  const [categoryId, setCategoryId] = useState(defaultCategoryId || (categories[0] ? categories[0].id : ''));
   const [subcategoryId, setSubcategoryId] = useState('');
   const [note, setNote] = useState('');
   const [date, setDate] = useState(defaultDate);
@@ -955,6 +966,44 @@ function CategoryModal({ category, onClose, onSave, onDelete }) {
         {onDelete && (confirmDel
           ? <button onClick={onDelete} style={{ color: C.danger, border: `1px solid ${C.danger}` }} className="w-full py-2.5 rounded-xl text-sm font-semibold">Confirm delete</button>
           : <button onClick={() => setConfirmDel(true)} style={{ color: C.faint }} className="w-full py-1 text-xs font-medium">Delete category</button>)}
+      </div>
+    </Sheet>
+  );
+}
+function CategoryDetailSheet({ category, expenses, spent, getSubcategoryName, onClose, onDeleteExpense, onEdit, onAddMoney, onAddExpense }) {
+  const entries = expenses
+    .filter(e => e.categoryId === category.id)
+    .sort((a, b) => (a.date + a.time < b.date + b.time ? 1 : -1));
+
+  return (
+    <Sheet title={category.name} onClose={onClose}>
+      <div className="flex flex-col gap-4">
+        <div className="flex items-center gap-3">
+          <IconBadge icon={category.icon} color={category.color} size={40} />
+          <div>
+            <div className="font-mono text-lg font-semibold" style={{ color: C.text }}>
+              {fmt(spent)}{category.limit > 0 ? <span style={{ color: C.faint }} className="font-normal text-sm"> {' / ' + fmt(category.limit)} this month</span> : null}
+            </div>
+            <div className="text-[11px]" style={{ color: C.faint }}>{entries.length} {entries.length === 1 ? 'entry' : 'entries'} total</div>
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={onAddExpense} style={{ background: C.surface2, border: `1px solid ${C.border}`, color: C.text }} className="flex-1 flex items-center justify-center gap-1.5 text-xs font-semibold py-2 rounded-lg"><Plus size={13} /> Log expense</button>
+          <button onClick={onAddMoney} style={{ background: C.surface2, border: `1px solid ${C.border}`, color: C.positive }} className="flex-1 flex items-center justify-center gap-1.5 text-xs font-semibold py-2 rounded-lg"><Plus size={13} /> Add money</button>
+          <button onClick={onEdit} style={{ background: C.surface2, border: `1px solid ${C.border}`, color: C.muted }} className="px-3 rounded-lg"><Pencil size={14} /></button>
+        </div>
+        <div>
+          <div style={{ color: C.faint }} className="text-[10px] font-semibold uppercase tracking-wider mb-2">All logs</div>
+          {entries.length === 0 ? (
+            <EmptyState text="No entries logged for this category yet." />
+          ) : (
+            <div style={{ background: C.surface, border: `1px solid ${C.borderSoft}` }} className="rounded-xl divide-y max-h-[45vh] overflow-y-auto">
+              {entries.map(e => (
+                <ExpenseRow key={e.id} e={e} cat={category} sub={getSubcategoryName(category, e.subcategoryId)} onDelete={() => onDeleteExpense(e.id)} showDate />
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </Sheet>
   );
